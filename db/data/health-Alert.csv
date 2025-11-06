@@ -1,0 +1,2 @@
+ID,patient_ID,relatedEncounter_ID,createdAt,severity,ruleId,message,status,acknowledgedBy,acknowledgedAt,clearedAt,externalRef
+al111111-0000-4000-8000-000000000001,11111111-1111-1111-1111-111111111111,e1111111-0000-4000-8000-000000000001,2025-11-03T11:58:10Z,medium,rule-hr-threshold,"Elevated HR: 78 bpm",new,,,

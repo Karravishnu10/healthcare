@@ -1,0 +1,4 @@
+ID,encounter_ID,observationType,observationAt,valueText,valueNumeric,unit,performedBy,attachmentRef
+eo111111-0000-4000-8000-000000000001,e1111111-0000-4000-8000-000000000001,note,2025-11-03T11:35:00Z,"Patient reports improved sleep",,,"dr.jones",
+eo111111-0000-4000-8000-000000000002,e1111111-0000-4000-8000-000000000001,vital,2025-11-03T11:36:00Z,,78,bpm,nurse.alex,
+

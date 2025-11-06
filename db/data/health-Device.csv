@@ -1,0 +1,3 @@
+deviceId,model,manufacturer,deviceType,firmwareVersion,registeredAt,lastSeenAt,status,metadata
+DEV-001,OMNI-100,AcmeCorp,pulse_ox,1.2.3,2025-10-28T08:00:00Z,2025-11-03T12:00:00Z,Active,"{""protocol"":""mqtt"",""capabilities"":[""spo2"",""hr""]}"
+DEV-002,BP-X200,HealthTech,bp_monitor,3.4.1,2025-10-29T09:00:00Z,2025-11-04T14:00:00Z,Active,"{""protocol"":""https"",""capabilities"":[""bp_sys"",""bp_dia""]}"

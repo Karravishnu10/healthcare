@@ -1,0 +1,3 @@
+ID,firstName,lastName,middleName,gender,dateOfBirth,phone,email,address,primaryLanguage,createdBy,createdAt,modifiedBy,modifiedAt,sourceSystem
+11111111-1111-1111-1111-111111111111,Alice,Smith,Marie,Female,1980-03-15,+1-555-0101,alice.smith@example.com,"123 Oak St, Springfield",en,seed,2025-11-01T09:00:00Z,seed,2025-11-01T09:00:00Z,legacy-ehr
+22222222-2222-2222-2222-222222222222,Bob,Jones,Alan,Male,1972-07-22,+1-555-0202,bob.jones@example.com,"45 Pine Ave, Springfield",en,seed,2025-11-01T09:00:00Z,seed,2025-11-01T09:00:00Z,legacy-ehr
