@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Fiori Health — CRUD (Draft-aware, Activate on Save)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <script id="sap-ui-bootstrap" src="https://ui5.sap.com/resources/sap-ui-core.js"
+          data-sap-ui-libs="sap.m" data-sap-ui-theme="sap_fiori_3"></script>
+  <style>
+    html, body, #content { height:100%; margin:0; padding:0; }
+    .statusBar { padding:0.5rem; background:#fafafa; border-bottom:1px solid #ddd; font-size:13px; }
+    .entityStatus { display:inline-block; margin-right:12px; }
+    .jsonArea { white-space: pre-wrap; font-family: monospace; font-size:12px; }
+    .actionCell { display:flex; gap:6px; }
+    .noDataHint { padding:1rem; color:#666; font-style:italic; }
+  </style>
+</head>
+<body class="sapUiBody" id="content">
+<script>
+/*
+  Single-file UI5 CRUD app for CAP OData v4 with correct draft flow for draft-enabled entities.
+  - Open in same origin as your CAP service (Application Studio preview recommended).
+  - serviceUrl defaults to '/health/' (matches your service.cds path); change if needed.
+*/
+
+const serviceUrl = '/health/'; // adjust to full preview URL if necessary
+
+// OData v4 model (binding friendly)
+const oModel = new sap.ui.model.odata.v4.ODataModel({
+  serviceUrl,
+  groupId: '$auto',
+  synchronizationMode: 'None'
+});
+sap.ui.getCore().setModel(oModel);
+
+// Entities and schema mapping (projection names in your metadata)
+const DRAFT_ENTITIES = ['Patients', 'Encounters']; // these require draft flow
+const READONLY_ENTITIES = ['AuditLogs']; // do not allow edit/create/delete
+
+const ENTITY_SCHEMAS = {
+  Patients: [
+    { label:'firstName', prop:'firstName' },
+    { label:'lastName', prop:'lastName' },
+    { label:'middleName', prop:'middleName' },
+    { label:'gender', prop:'gender' },
+    { label:'dateOfBirth', prop:'dateOfBirth', inputType:'date' },
+    { label:'phone', prop:'phone' },
+    { label:'email', prop:'email' },
+    { label:'address', prop:'address' }
+  ],
+  PatientIdentifiers: [
+    { label:'patient_ID', prop:'patient_ID', required:true },
+    { label:'idType', prop:'idType' },
+    { label:'idValue', prop:'idValue' }
+  ],
+  ConsentRecords: [
+    { label:'patient_ID', prop:'patient_ID', required:true },
+    { label:'consentType', prop:'consentType' },
+    { label:'consentGranted', prop:'consentGranted' }
+  ],
+  Devices: [
+    { label:'deviceId', prop:'deviceId', required:true },
+    { label:'model', prop:'model' },
+    { label:'manufacturer', prop:'manufacturer' },
+    { label:'deviceType', prop:'deviceType' },
+    { label:'status', prop:'status' }
+  ],
+  DeviceAssignments: [
+    { label:'device_deviceId', prop:'device_deviceId', required:true },
+    { label:'patient_ID', prop:'patient_ID', required:true },
+    { label:'assignedBy', prop:'assignedBy' },
+    { label:'assignedAt', prop:'assignedAt', inputType:'datetime' }
+  ],
+  VitalReadings: [
+    { label:'patient_ID', prop:'patient_ID', required:true },
+    { label:'device_deviceId', prop:'device_deviceId', required:true },
+    { label:'recordedAt', prop:'recordedAt', inputType:'datetime' },
+    { label:'measurementType', prop:'measurementType' },
+    { label:'valueNumeric', prop:'valueNumeric' }
+  ],
+  Encounters: [
+    { label:'patient_ID', prop:'patient_ID', required:true },
+    { label:'encounterType', prop:'encounterType' },
+    { label:'startAt', prop:'startAt', inputType:'datetime' },
+    { label:'status', prop:'status' }
+  ],
+  EncounterObservations: [
+    { label:'encounter_ID', prop:'encounter_ID', required:true },
+    { label:'observationType', prop:'observationType' },
+    { label:'observationAt', prop:'observationAt', inputType:'datetime' },
+    { label:'valueNumeric', prop:'valueNumeric' }
+  ],
+  Alerts: [
+    { label:'patient_ID', prop:'patient_ID', required:true },
+    { label:'relatedEncounter_ID', prop:'relatedEncounter_ID' },
+    { label:'severity', prop:'severity' },
+    { label:'message', prop:'message' },
+    { label:'status', prop:'status' }
+  ],
+  AlertHistory: [
+    { label:'alert_ID', prop:'alert_ID', required:true },
+    { label:'changedAt', prop:'changedAt', inputType:'datetime' },
+    { label:'changedBy', prop:'changedBy' },
+    { label:'note', prop:'note' }
+  ],
+  AuditLogs: [
+    { label:'eventAt', prop:'eventAt' },
+    { label:'userId', prop:'userId' },
+    { label:'action', prop:'action' },
+    { label:'targetEntity', prop:'targetEntity' },
+    { label:'details', prop:'details' }
+  ]
+};
+
+// helper regex for UUIDs
+const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+// ===================================================================
+// Utility: build OData key segment
+// buildKeySegment(entityName, id, isActive)
+// - isActive = true  => Active instance (IsActiveEntity=true) (used for draftEdit POST target and delete of active)
+// - isActive = false => Draft instance (IsActiveEntity=false) (used for reading and patching drafts)
+// - isActive = undefined/null => no IsActiveEntity appended (for non-draft entities)
+// Returns e.g. "(11111111-1111-1111-1111-111111111111,IsActiveEntity=true)"
+// ===================================================================
+function buildKeySegment(entityName, id, isActive) {
+  if (id === undefined || id === null) return null;
+  const s = String(id);
+  const alreadyQuoted = (s.startsWith("'") && s.endsWith("'")) || (s.startsWith('"') && s.endsWith('"'));
+  const quotedId = alreadyQuoted ? s : (uuidRegex.test(s) ? s : `'${encodeURIComponent(s.replace(/'/g,"''"))}'`);
+  if (DRAFT_ENTITIES.includes(entityName) && typeof isActive === 'boolean') {
+    return `(${quotedId},IsActiveEntity=${isActive ? 'true' : 'false'})`;
+  }
+  return `(${quotedId})`;
+}
+
+// ===================================================================
+// apiFetch: wrapper for fetch that returns parsed JSON or throws with details
+// ===================================================================
+async function apiFetch(url, opts={}) {
+  const headers = {...(opts.headers||{})};
+  if (!opts.skipJsonHeaders) headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  const res = await fetch(url, {...opts, credentials:'same-origin', headers});
+  const text = await res.text();
+  let parsed;
+  try { parsed = text ? JSON.parse(text) : null; } catch(e) { parsed = text; }
+  if (!res.ok) {
+    // try to extract useful message
+    const msg = (parsed && parsed.error && parsed.error.message) ? parsed.error.message : (typeof parsed === 'string' ? parsed : JSON.stringify(parsed));
+    throw new Error(`HTTP ${res.status}: ${msg}`);
+  }
+  return parsed;
+}
+
+// ===================================================================
+// CRUD helpers - read/patch/create/delete; read/patch accept isActive flag
+// ===================================================================
+async function readEntity(entityName, id, expand, isActive) {
+  const key = buildKeySegment(entityName, id, isActive);
+  if (!key) throw new Error('Invalid key');
+  let url = `${serviceUrl}${entityName}${key}?$select=*`;
+  if (expand) url += `&$expand=${encodeURIComponent(expand)}`;
+  console.debug('READ', url);
+  return await apiFetch(url, { method:'GET' });
+}
+
+async function patchEntity(entityName, id, payload, isActive) {
+  const key = buildKeySegment(entityName, id, isActive);
+  if (!key) throw new Error('Invalid key');
+  const url = `${serviceUrl}${entityName}${key}`;
+  console.debug('PATCH', url, payload);
+  return await apiFetch(url, { method:'PATCH', body: JSON.stringify(payload) });
+}
+
+async function createEntity(entityName, payload) {
+  const url = `${serviceUrl}${entityName}`;
+  console.debug('CREATE', url, payload);
+  return await apiFetch(url, { method:'POST', body: JSON.stringify(payload) });
+}
+
+async function deleteEntity(entityName, id) {
+  // For draft-enabled entities we delete the active instance (IsActiveEntity=true)
+  const isActive = DRAFT_ENTITIES.includes(entityName) ? true : undefined;
+  const key = buildKeySegment(entityName, id, isActive);
+  if (!key) throw new Error('Invalid key');
+  const url = `${serviceUrl}${entityName}${key}`;
+  console.debug('DELETE', url);
+  const res = await fetch(url, { method:'DELETE', credentials:'same-origin' });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Delete failed ${res.status}: ${txt}`);
+  }
+  return true;
+}
+
+// ===================================================================
+// UI: page + tabs + tables
+// ===================================================================
+const page = new sap.m.Page({ title: 'Health — CRUD (draft-aware, auto-activate)' });
+const tabBar = new sap.m.IconTabBar({ backgroundDesign: 'Transparent' });
+
+page.addContent(new sap.m.Toolbar({
+  content: [
+    new sap.m.Text({ text: 'Endpoint status:' }),
+    new sap.m.ToolbarSeparator()
+  ]
+}));
+page.addContent(tabBar);
+page.placeAt('content');
+
+// Add status area under the toolbar
+const toolbar = page.getContent()[0];
+const statusHBox = new sap.m.HBox({ alignItems:'Center' });
+toolbar.addContent(statusHBox);
+const statusMap = {};
+
+// keep table refs
+const tableMap = {};
+
+// helper - get expand clauses
+function getExpandForEntity(entityName) {
+  if (entityName === 'VitalReadings') return 'patient($select=ID,lastName),device($select=deviceId,model)';
+  if (entityName === 'Encounters') return 'patient($select=ID,lastName,firstName)';
+  if (entityName === 'Alerts') return 'patient($select=ID,lastName),relatedEncounter($select=ID)';
+  if (entityName === 'DeviceAssignments') return 'device($select=deviceId,model),patient($select=ID,lastName)';
+  if (entityName === 'PatientIdentifiers' || entityName === 'ConsentRecords') return 'patient($select=ID,lastName,firstName)';
+  if (entityName === 'EncounterObservations') return 'encounter($select=ID,encounterType)';
+  if (entityName === 'AlertHistory') return 'alert($select=ID)';
+  return null;
+}
+
+// create a tab with table for an entity
+function addEntityTab(entityName) {
+  // status text for this entity
+  const statusText = new sap.m.Text({ text: `${entityName}: checking...` }).addStyleClass('entityStatus');
+  statusMap[entityName] = statusText;
+  statusHBox.addItem(statusText);
+
+  const tab = new sap.m.IconTabFilter({ text: entityName });
+  const container = new sap.m.VBox({ width: '100%' });
+
+  // toolbar: New (unless read-only), Refresh, Search
+  const btnNew = new sap.m.Button({ icon: 'sap-icon://add', text: 'New', press: () => openCreateDialog(entityName) });
+  if (READONLY_ENTITIES.includes(entityName)) btnNew.setEnabled(false);
+  const btnRefresh = new sap.m.Button({ icon: 'sap-icon://refresh', press: () => refreshEntity(entityName) });
+  const search = new sap.m.SearchField({ width:'35%', placeholder: 'Search...', liveChange: function(){ applyFilter(entityName, this.getValue()); }});
+  const toolbar = new sap.m.Toolbar({ content: [ btnNew, new sap.m.ToolbarSeparator(), btnRefresh, new sap.m.ToolbarSpacer(), search ] });
+
+  // columns - simple heuristic: show up to 4 columns from schema
+  const schema = ENTITY_SCHEMAS[entityName] || [];
+  const columns = schema.slice(0,4).map(f => ({ label: f.label, prop: f.prop }));
+  // put ID or key at start if present (deviceId or ID)
+  if (!columns.find(c => c.prop === 'ID')) {
+    if (schema.some(s => s.prop === 'ID')) columns.unshift({ label: 'ID', prop: 'ID' });
+    if (entityName === 'Devices' && !columns.find(c => c.prop === 'deviceId')) columns.unshift({ label: 'Device ID', prop: 'deviceId' });
+  }
+
+  const table = new sap.m.Table({ inset:false, headerToolbar: toolbar });
+  columns.forEach(c => table.addColumn(new sap.m.Column({ header: new sap.m.Text({ text: c.label }) })));
+  table.addColumn(new sap.m.Column({ header: new sap.m.Text({ text: 'Actions' }) }));
+
+  // cells
+  const cells = columns.map(c => new sap.m.Text({ text: '{' + c.prop + '}' }));
+
+  // actions per row
+  const btnEdit = new sap.m.Button({ icon: 'sap-icon://edit', press: function(evt){
+    const ctx = evt.getSource().getParent().getBindingContext();
+    if (!ctx) { sap.m.MessageToast.show('No context'); return; }
+    const id = ctx.getProperty('ID') || ctx.getProperty('deviceId') || ctx.getProperty('eventAt');
+    openEditDialog(entityName, id);
+  }});
+  const btnDelete = new sap.m.Button({ icon: 'sap-icon://delete', press: async function(evt){
+    const ctx = evt.getSource().getParent().getBindingContext();
+    if (!ctx) return;
+    const id = ctx.getProperty('ID') || ctx.getProperty('deviceId') || ctx.getProperty('eventAt');
+    if (!confirm(`Delete ${entityName} ${id}?`)) return;
+    try {
+      await deleteEntity(entityName, id);
+      sap.m.MessageToast.show('Deleted');
+      refreshEntity(entityName);
+    } catch (e) {
+      console.error(e);
+      sap.m.MessageToast.show('Delete failed — see console');
+    }
+  }});
+  const actionBox = new sap.m.HBox({ items: [btnEdit, btnDelete], renderType: 'Bare' });
+  if (READONLY_ENTITIES.includes(entityName)) actionBox.setVisible(false);
+
+  const template = new sap.m.ColumnListItem({ type:'Active', cells: [...cells, actionBox] });
+
+  const selectProps = columns.map(c => c.prop.split('/')[0]).filter((v,i,a) => a.indexOf(v) === i).join(',');
+  const params = { $select: selectProps || 'ID' };
+  const expand = getExpandForEntity(entityName);
+  if (expand) params.$expand = expand;
+
+  table.bindAggregation('items', { path: '/' + entityName, parameters: params, template });
+
+  // no-data hint
+  const noDataText = new sap.m.Text({ text: 'No data available', visible:false }).addStyleClass('noDataHint');
+  container.addItem(table);
+  container.addItem(noDataText);
+
+  // after initial load show no-data hint if needed
+  table.attachEventOnce('updateFinished', function() {
+    setTimeout(()=> { noDataText.setVisible(table.getItems().length === 0); }, 200);
+  });
+
+  tableMap[entityName] = { table, columns };
+
+  tab.addContent(container);
+  tabBar.addItem(tab);
+}
+
+// Create tabs for all entities defined in ENTITY_SCHEMAS
+Object.keys(ENTITY_SCHEMAS).forEach(name => addEntityTab(name));
+
+// ===================================================================
+// Dialogs & form helpers
+// ===================================================================
+function buildForm(schema, data) {
+  const vbox = new sap.m.VBox({ width: '100%', renderType: 'Bare' });
+  schema.forEach(field => {
+    const val = (data && data[field.prop] !== undefined) ? data[field.prop] : '';
+    let input;
+    if (field.inputType === 'date') {
+      input = new sap.m.DatePicker({ value: val ? String(val).split('T')[0] : '' });
+    } else if (field.inputType === 'datetime') {
+      input = new sap.m.DateTimePicker({ value: val || '' });
+    } else {
+      if (field.prop === 'consentGranted') input = new sap.m.CheckBox({ selected: Boolean(val) });
+      else input = new sap.m.Input({ value: val || '' });
+    }
+    vbox.addItem(new sap.m.Label({ text: field.label + (field.required ? ' *' : '') }));
+    vbox.addItem(input);
+    input.data('prop', field.prop);
+    if (input instanceof sap.m.CheckBox) input.setSelected(Boolean(val));
+  });
+  return vbox;
+}
+
+function readFormValues(form) {
+  const data = {};
+  const inputs = form.findAggregatedObjects(true, o => (o instanceof sap.m.Input || o instanceof sap.m.DatePicker || o instanceof sap.m.DateTimePicker || o instanceof sap.m.CheckBox));
+  inputs.forEach(inp => {
+    const prop = inp.data('prop');
+    if (!prop) return;
+    let val;
+    if (inp instanceof sap.m.DatePicker) val = inp.getValue() || '';
+    else if (inp instanceof sap.m.DateTimePicker) val = inp.getValue() || '';
+    else if (inp instanceof sap.m.CheckBox) val = inp.getSelected();
+    else val = inp.getValue && inp.getValue();
+    data[prop] = val;
+  });
+  return data;
+}
+
+// ===================================================================
+// Draft-aware Edit flow (full: draftEdit -> read draft -> patch draft -> draftActivate)
+// For non-draft entities standard read -> patch
+// ===================================================================
+async function openEditDialog(entityName, id) {
+  try {
+    if (!id) { sap.m.MessageToast.show('Missing ID'); return; }
+    const expand = getExpandForEntity(entityName);
+
+    if (DRAFT_ENTITIES.includes(entityName)) {
+      // 1) POST draftEdit on active instance
+      const activeKey = buildKeySegment(entityName, id, true);
+      const draftEditUrl = `${serviceUrl}${entityName}${activeKey}/draftEdit`;
+      console.debug('POST draftEdit ->', draftEditUrl);
+      try {
+        await apiFetch(draftEditUrl, { method: 'POST', body: JSON.stringify({ PreserveChanges: false }) });
+      } catch (err) {
+        // try without JSON body if server rejects empty object
+        try { await apiFetch(draftEditUrl, { method: 'POST', skipJsonHeaders:true, body: '' }); }
+        catch(e2) { throw err; }
+      }
+
+      // 2) Read draft (IsActiveEntity=false)
+      const draftData = await readEntity(entityName, id, expand, false);
+
+      // 3) Show form with draft data
+      const schema = ENTITY_SCHEMAS[entityName] || [];
+      const form = buildForm(schema, draftData);
+      const dlg = new sap.m.Dialog({
+        title: `Edit ${entityName} — ${id}`,
+        content: [ new sap.m.ScrollContainer({ horizontal:false, vertical:true, height:'60vh', content: [ form ] }) ],
+        beginButton: new sap.m.Button({ text:'Save & Activate', press: async function(){
+          const payload = readFormValues(form);
+          Object.keys(payload).forEach(k => { if (payload[k] === '' || payload[k] === undefined) delete payload[k]; });
+
+          try {
+            // 4) PATCH draft (IsActiveEntity=false)
+            await patchEntity(entityName, id, payload, false);
+
+            // 5) Activate draft -> writes to active DB
+            const draftKey = buildKeySegment(entityName, id, false);
+            const activateUrl = `${serviceUrl}${entityName}${draftKey}/draftActivate`;
+            console.debug('POST draftActivate ->', activateUrl);
+            try {
+              await apiFetch(activateUrl, { method:'POST', body: JSON.stringify({}) });
+            } catch (actErr) {
+              // fallback without JSON body
+              try { await apiFetch(activateUrl, { method:'POST', skipJsonHeaders:true, body: '' }); }
+              catch(e2){ throw actErr; }
+            }
+
+            sap.m.MessageToast.show('Saved and activated (active DB updated)');
+            dlg.close(); dlg.destroy();
+            // refresh the active table
+            refreshEntity(entityName);
+          } catch (e) {
+            console.error('Save/Activate failed', e);
+            sap.m.MessageToast.show('Save/Activate failed — see console');
+          }
+        }}),
+        endButton: new sap.m.Button({ text:'Cancel', press: function(){ dlg.close(); dlg.destroy(); }})
+      });
+      dlg.open();
+    } else {
+      // Non-draft entity: normal edit
+      const data = await readEntity(entityName, id, expand, undefined);
+      const schema = ENTITY_SCHEMAS[entityName] || [];
+      const form = buildForm(schema, data);
+      const dlg = new sap.m.Dialog({
+        title: `Edit ${entityName} — ${id}`,
+        content: [ new sap.m.ScrollContainer({ horizontal:false, vertical:true, height:'60vh', content: [ form ] }) ],
+        beginButton: new sap.m.Button({ text:'Save', press: async function(){
+          const payload = readFormValues(form);
+          Object.keys(payload).forEach(k => { if (payload[k] === '' || payload[k] === undefined) delete payload[k]; });
+          try {
+            await patchEntity(entityName, id, payload, undefined);
+            sap.m.MessageToast.show('Saved');
+            dlg.close(); dlg.destroy();
+            refreshEntity(entityName);
+          } catch (e) {
+            console.error('Save failed', e);
+            sap.m.MessageToast.show('Save failed — see console');
+          }
+        }}),
+        endButton: new sap.m.Button({ text:'Cancel', press: function(){ dlg.close(); dlg.destroy(); }})
+      });
+      dlg.open();
+    }
+  } catch (err) {
+    console.error('Failed to load record for edit', err);
+    sap.m.MessageToast.show('Failed to load record for edit — check console');
+  }
+}
+
+// ===================================================================
+// Create dialog (simple POST)
+function openCreateDialog(entityName) {
+  if (READONLY_ENTITIES.includes(entityName)) { sap.m.MessageToast.show('Entity is read-only'); return; }
+  const schema = ENTITY_SCHEMAS[entityName] || [];
+  const form = buildForm(schema, {});
+  const dlg = new sap.m.Dialog({
+    title: `Create ${entityName}`,
+    content: [ new sap.m.ScrollContainer({ horizontal:false, vertical:true, height:'60vh', content: [ form ] }) ],
+    beginButton: new sap.m.Button({ text:'Create', press: async function(){
+      const payload = readFormValues(form);
+      Object.keys(payload).forEach(k => { if (payload[k] === '' || payload[k] === undefined) delete payload[k]; });
+      try {
+        await createEntity(entityName, payload);
+        sap.m.MessageToast.show('Created');
+        dlg.close(); dlg.destroy();
+        refreshEntity(entityName);
+      } catch (e) {
+        console.error('Create failed', e);
+        sap.m.MessageToast.show('Create failed — see console');
+      }
+    }}),
+    endButton: new sap.m.Button({ text:'Cancel', press: function(){ dlg.close(); dlg.destroy(); }})
+  });
+  dlg.open();
+}
+
+// ===================================================================
+// Refresh & filter helpers
+function refreshEntity(entityName) {
+  const entry = tableMap[entityName];
+  if (!entry) return;
+  try { entry.table.getBinding('items').refresh(); } catch(e){ console.warn('Refresh failed', e); }
+  pingEndpoints(); // update status text
+}
+
+function applyFilter(entityName, value) {
+  const entry = tableMap[entityName];
+  if (!entry) return;
+  const binding = entry.table.getBinding('items');
+  if (!binding) return;
+  if (!value) return binding.filter([]);
+  const prop = (entry.columns.find(c => c.prop !== 'ID') || entry.columns[0]).prop.split('/')[0];
+  const oFilter = new sap.ui.model.Filter({ path: prop, operator: sap.ui.model.FilterOperator.Contains, value1: value });
+  binding.filter([oFilter]);
+}
+
+// ===================================================================
+// Endpoint status ping (simple lightweight $top=1 ping first; you can switch to $count if wanted)
+// ===================================================================
+async function pingEndpoints() {
+  for (const name of Object.keys(ENTITY_SCHEMAS)) {
+    try {
+      const url = `${serviceUrl}${name}?$top=1`;
+      const res = await fetch(url, { credentials:'same-origin' });
+      if (!res.ok) {
+        const txt = await res.text();
+        if (statusMap[name]) statusMap[name].setText(`${name}: ERROR (${res.status})`);
+        console.error(`${name} ping error`, res.status, txt);
+      } else {
+        const json = await res.json();
+        const count = Array.isArray(json.value) ? json.value.length : 0;
+        if (statusMap[name]) statusMap[name].setText(`${name}: OK (${count})`);
+      }
+    } catch (err) {
+      if (statusMap[name]) statusMap[name].setText(`${name}: FAILED`);
+      console.error('Ping failed', name, err);
+    }
+  }
+}
+
+// Wire up statusMap references (statusMap points to UI texts added earlier)
+Object.keys(ENTITY_SCHEMAS).forEach(name => {
+  // map statusMap -> the control we created
+  statusMap[name] = statusMap[name] || (window.__statusMap && window.__statusMap[name]) || statusMap[name];
+});
+
+// Initial ping
+setTimeout(pingEndpoints, 300);
+
+// ===================================================================
+// Initialization: fill tableMap references (they were created in addEntityTab) and expose refresh
+// ===================================================================
+setTimeout(()=> {
+  // iterate over tabBar filters to find tables and set tableMap entries properly (robust fallback)
+  try {
+    const filters = tabBar.getItems();
+    filters.forEach(f => {
+      const entityName = f.getText();
+      const content = f.getContent() && f.getContent()[0];
+      if (!content) return;
+      const table = content.getItems().find(i => i instanceof sap.m.Table);
+      if (table) {
+        const schema = ENTITY_SCHEMAS[entityName] || [];
+        const columns = (schema.slice(0,4).map(fld => ({ label: fld.label, prop: fld.prop })));
+        tableMap[entityName] = tableMap[entityName] || { table, columns };
+      }
+    });
+  } catch(e) { console.warn('TableMap populate failed', e); }
+}, 600);
+
+// Global OData request failure handler — show console details and re-ping
+sap.ui.getCore().attachInit(function() {
+  oModel.attachRequestFailed(function(evt) {
+    const info = evt.getParameter('responseText') || evt.getParameter('statusText') || evt;
+    console.error('Global OData request failed:', info);
+    pingEndpoints();
+  });
+});
+
+// expose helper for debugging
+window.refreshEntity = refreshEntity;
+
+console.info('Draft-aware CRUD UI loaded. serviceUrl=', serviceUrl);
+
+</script>
+</body>
+</html>
