@@ -1,25 +1,36 @@
-# Getting Started
+# 🏥 Healthcare Application — SAP BTP
 
-Welcome to your new project.
+A **Healthcare Management** web application built on **SAP Business Technology Platform (BTP)** using the **SAP Cloud Application Programming Model (CAP)**. It features a rich HTML5/SAPUI5 frontend for healthcare data management with a CDS-based OData backend.
 
-It contains these folders and files, following our recommended project layout:
+---
 
-File or Folder | Purpose
----------|----------
-`app/` | content for UI frontends goes here
-`db/` | your domain models and data go here
-`srv/` | your service models and code go here
-`package.json` | project metadata and configuration
-`readme.md` | this getting started guide
+## 📁 Project Structure
 
+---
 
-## Next Steps
+## 🚀 Tech Stack
 
-- Open a new terminal and run `cds watch`
-- (in VS Code simply choose _**Terminal** > Run Task > cds watch_)
-- Start adding content, for example, a [db/schema.cds](db/schema.cds).
+| Layer        | Technology                                  |
+|--------------|----------------------------------------------|
+| Frontend     | HTML5 (74%), SAPUI5 / Fiori Elements         |
+| Backend      | Node.js + SAP CAP (CDS Services)             |
+| Data Model   | CAP CDS (25%) + SQLite (local) / HANA (prod) |
+| Platform     | SAP Business Technology Platform (BTP)       |
 
+---
 
-## Learn More
+## ✨ Features
 
-Learn more at https://cap.cloud.sap/docs/get-started/.
+- 🏥 Healthcare domain data model (Patients, Doctors, Appointments, etc.)
+- 📋 OData-based REST API services via SAP CAP
+- 🌐 Rich HTML5 / SAPUI5 frontend for healthcare data management
+- 🗄️ SQLite (`my.db`) for local development
+- ☁️ Ready for deployment to SAP BTP Cloud Foundry
+
+---
+
+## 🛠️ Prerequisites
+
+- [Node.js](https://nodejs.org/) (v18 or higher)
+- [SAP CAP CLI](https://cap.cloud.sap/docs/get-started/) — install globally:
+```bash
